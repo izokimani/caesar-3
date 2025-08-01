@@ -174,6 +174,13 @@ export default function CaesarGame() {
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null)
   const [hoveredTile, setHoveredTile] = useState<{ x: number; y: number } | null>(null)
 
+  // Add UX state
+  const [showTooltip, setShowTooltip] = useState(false)
+  const [tooltipContent, setTooltipContent] = useState("")
+  const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 })
+  const [lastAction, setLastAction] = useState("")
+  const [showLastAction, setShowLastAction] = useState(false)
+
   // Add notification function
   const addNotification = useCallback((eventId: string) => {
     const event = GAME_EVENTS.find(e => e.id === eventId)
@@ -190,6 +197,15 @@ export default function CaesarGame() {
       }, 5000)
     }
   }, [])
+
+  // Show last action feedback
+  const showActionFeedback = useCallback((action: string) => {
+    setLastAction(action)
+    setShowLastAction(true)
+    setTimeout(() => setShowLastAction(false), 2000)
+  }, [])
+
+  // Keyboard shortcuts will be added after function declarations
 
   // Initialize isometric city grid
   useEffect(() => {
@@ -329,6 +345,30 @@ export default function CaesarGame() {
     })
   }, [cityGrid, hoveredTile, gameState.selectedTool])
 
+  // Helper function to convert screen coordinates to grid coordinates
+  const screenToGrid = useCallback((screenX: number, screenY: number) => {
+    const tileWidth = 30
+    const tileHeight = 15
+    const centerX = 1200 / 2  // canvas.width / 2
+    const centerY = 50
+
+    // Adjust for the center offset
+    const adjustedX = screenX - centerX
+    const adjustedY = screenY - centerY
+
+    // Invert the isometric projection formula:
+    // screenX = (x - y) * (tileWidth / 2) + centerX
+    // screenY = (x + y) * (tileHeight / 2) + centerY
+    // 
+    // Solving for x and y:
+    // x = (adjustedX / (tileWidth / 2) + adjustedY / (tileHeight / 2)) / 2
+    // y = (adjustedY / (tileHeight / 2) - adjustedX / (tileWidth / 2)) / 2
+    const gridX = Math.floor((adjustedX / (tileWidth / 2) + adjustedY / (tileHeight / 2)) / 2)
+    const gridY = Math.floor((adjustedY / (tileHeight / 2) - adjustedX / (tileWidth / 2)) / 2)
+
+    return { x: gridX, y: gridY }
+  }, [])
+
   // Add mouse move handler
   const handleCanvasMouseMove = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current
@@ -338,16 +378,13 @@ export default function CaesarGame() {
     const mouseX = event.clientX - rect.left
     const mouseY = event.clientY - rect.top
 
-    const tileWidth = 30
-    const tileHeight = 15
-    const centerX = canvas.width / 2
-    const centerY = 50
+    // Scale mouse coordinates to match canvas coordinates
+    const scaleX = canvas.width / rect.width
+    const scaleY = canvas.height / rect.height
+    const scaledX = mouseX * scaleX
+    const scaledY = mouseY * scaleY
 
-    const worldX = mouseX - centerX
-    const worldY = mouseY - centerY
-
-    const gridX = Math.floor((worldX / (tileWidth / 2) + worldY / (tileHeight / 2)) / 2)
-    const gridY = Math.floor((worldY / (tileHeight / 2) - worldX / (tileWidth / 2)) / 2)
+    const { x: gridX, y: gridY } = screenToGrid(scaledX, scaledY)
 
     if (gridX >= 0 && gridX < 60 && gridY >= 0 && gridY < 40) {
       setHoveredTile({ x: gridX, y: gridY })
@@ -356,7 +393,7 @@ export default function CaesarGame() {
     }
 
     setMousePos({ x: mouseX, y: mouseY })
-  }, [])
+  }, [screenToGrid])
 
   const handleCanvasClick = useCallback(
     (event: React.MouseEvent<HTMLCanvasElement>) => {
@@ -367,18 +404,13 @@ export default function CaesarGame() {
       const clickX = event.clientX - rect.left
       const clickY = event.clientY - rect.top
 
-      const tileWidth = 30
-      const tileHeight = 15
-      const centerX = canvas.width / 2
-      const centerY = 50
+      // Scale mouse coordinates to match canvas coordinates
+      const scaleX = canvas.width / rect.width
+      const scaleY = canvas.height / rect.height
+      const scaledX = clickX * scaleX
+      const scaledY = clickY * scaleY
 
-      // Convert screen coordinates to world coordinates
-      const worldX = clickX - centerX
-      const worldY = clickY - centerY
-
-      // Convert world coordinates to grid coordinates using proper isometric math
-      const gridX = Math.floor((worldX / (tileWidth / 2) + worldY / (tileHeight / 2)) / 2)
-      const gridY = Math.floor((worldY / (tileHeight / 2) - worldX / (tileWidth / 2)) / 2)
+      const { x: gridX, y: gridY } = screenToGrid(scaledX, scaledY)
 
       // Ensure coordinates are within bounds
       if (gridX >= 0 && gridX < 60 && gridY >= 0 && gridY < 40) {
@@ -388,9 +420,11 @@ export default function CaesarGame() {
 
           if (gameState.selectedTool === "road") {
             tile.hasRoad = true
+            showActionFeedback("Road built!")
           } else if (gameState.selectedTool === "clear_land") {
             tile.building = undefined
             tile.hasRoad = false
+            showActionFeedback("Land cleared!")
           } else {
             // Place building
             const buildingData = Object.values(BUILDING_CATEGORIES)
@@ -411,8 +445,10 @@ export default function CaesarGame() {
                 }))
                 
                 addNotification("building_complete")
+                showActionFeedback(`${buildingData.name} built!`)
               } else {
                 addNotification("insufficient_funds")
+                showActionFeedback("Insufficient funds!")
               }
             }
           }
@@ -421,7 +457,7 @@ export default function CaesarGame() {
         })
       }
     },
-    [gameState.selectedTool, gameState.denarii, addNotification],
+    [gameState.selectedTool, gameState.denarii, addNotification, screenToGrid],
   )
 
   const togglePause = () => {
@@ -433,25 +469,170 @@ export default function CaesarGame() {
     setShowAdvisorDialog(true)
   }
 
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyPress = (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return // Don't handle shortcuts when typing in input fields
+      }
+
+      switch (event.key.toLowerCase()) {
+        case ' ':
+          event.preventDefault()
+          togglePause()
+          showActionFeedback(gameState.isPaused ? "Game Paused" : "Game Resumed")
+          break
+        case 'escape':
+          setShowFestivalDialog(false)
+          setShowAdvisorDialog(false)
+          setShowSettingsDialog(false)
+          setShowHelpDialog(false)
+          break
+        case 'f':
+          if (!showFestivalDialog) {
+            setShowFestivalDialog(true)
+            showActionFeedback("Festival Dialog Opened")
+          }
+          break
+        case 'a':
+          if (!showAdvisorDialog) {
+            openAdvisor("chief")
+            showActionFeedback("Advisor Dialog Opened")
+          }
+          break
+        case 'h':
+          if (!showHelpDialog) {
+            setShowHelpDialog(true)
+            showActionFeedback("Help Dialog Opened")
+          }
+          break
+        case 's':
+          if (!showSettingsDialog) {
+            setShowSettingsDialog(true)
+            showActionFeedback("Settings Dialog Opened")
+          }
+          break
+        case 'm':
+          setIsMuted(!isMuted)
+          showActionFeedback(isMuted ? "Sound Unmuted" : "Sound Muted")
+          break
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+        case '6':
+        case '7':
+        case '8':
+        case '9':
+          const categories = Object.keys(BUILDING_CATEGORIES)
+          const index = parseInt(event.key) - 1
+          if (index < categories.length) {
+            setSelectedCategory(categories[index])
+            showActionFeedback(`Switched to ${categories[index]} category`)
+          }
+          break
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyPress)
+    return () => window.removeEventListener('keydown', handleKeyPress)
+  }, [gameState.isPaused, showFestivalDialog, showAdvisorDialog, showSettingsDialog, showHelpDialog, isMuted, selectedCategory, togglePause, openAdvisor, showActionFeedback])
+
   return (
     <div className="h-screen bg-black flex flex-col overflow-hidden">
       {/* Top Menu Bar - Caesar 3 Style */}
-      <div className="bg-gradient-to-r from-amber-800 to-amber-600 text-white px-4 py-1 flex items-center justify-between text-sm border-b-2 border-amber-900">
-        <div className="flex items-center space-x-6">
-          <span className="font-bold cursor-pointer hover:text-yellow-200" onClick={() => addNotification("population_growth")}>📁 File</span>
-          <span className="cursor-pointer hover:text-yellow-200" onClick={() => setShowSettingsDialog(true)}>⚙️ Options</span>
-          <span className="cursor-pointer hover:text-yellow-200" onClick={() => setShowHelpDialog(true)}>❓ Help</span>
-          <span onClick={() => openAdvisor("chief")} className="cursor-pointer hover:text-yellow-200">
-            👨‍💼 Advisors
-          </span>
+      <div className="roman-gradient text-white px-6 py-4 flex items-center justify-between text-sm border-b-4 border-amber-950 shadow-roman-lg relative overflow-hidden">
+        {/* Background pattern */}
+        <div className="absolute inset-0 opacity-10">
+          <div className="absolute inset-0" style={{
+            backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.1'%3E%3Cpath d='M30 30c0-11.046-8.954-20-20-20s-20 8.954-20 20 8.954 20 20 20 20-8.954 20-20zm0 0c0 11.046 8.954 20 20 20s20-8.954 20-20-8.954-20-20-20-20 8.954-20 20z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`
+          }}></div>
+        </div>
+        
+        <div className="flex items-center space-x-8 relative z-10">
+          <div className="flex items-center space-x-3 animate-float">
+            <span className="text-3xl text-glow">🏛️</span>
+            <div>
+              <span className="text-roman text-2xl tracking-wider text-glow">CAESAR III</span>
+              <div className="text-xs text-amber-200 opacity-80">The Emoji Asset Library</div>
+            </div>
+          </div>
+          <div className="flex items-center space-x-6">
+            <button className="flex items-center space-x-2 px-4 py-2 rounded-lg hover:bg-amber-700/50 transition-all duration-300 hover:scale-105 btn-roman">
+              <span className="text-lg">📁</span>
+              <span className="font-semibold">File</span>
+            </button>
+            <button 
+              onClick={() => setShowSettingsDialog(true)}
+              className="flex items-center space-x-2 px-4 py-2 rounded-lg hover:bg-amber-700/50 transition-all duration-300 hover:scale-105 btn-roman"
+            >
+              <span className="text-lg">⚙️</span>
+              <span className="font-semibold">Options</span>
+            </button>
+            <button 
+              onClick={() => setShowHelpDialog(true)}
+              className="flex items-center space-x-2 px-4 py-2 rounded-lg hover:bg-amber-700/50 transition-all duration-300 hover:scale-105 btn-roman"
+            >
+              <span className="text-lg">❓</span>
+              <span className="font-semibold">Help</span>
+            </button>
+            <button 
+              onClick={() => openAdvisor("chief")}
+              className="flex items-center space-x-2 px-4 py-2 rounded-lg hover:bg-amber-700/50 transition-all duration-300 hover:scale-105 btn-roman"
+            >
+              <span className="text-lg">👨‍💼</span>
+              <span className="font-semibold">Advisors</span>
+            </button>
+          </div>
         </div>
 
-        <div className="flex items-center space-x-6">
-          <span>{RESOURCE_ICONS.denarii} {gameState.denarii}</span>
-          <span>{RESOURCE_ICONS.population} {gameState.population}</span>
-          <span>{RESOURCE_ICONS.food} {gameState.food}</span>
-          <span>{RESOURCE_ICONS.favor} {gameState.favor}%</span>
-          <span>{gameState.isPaused ? "⏸️ PAUSED" : `${RESOURCE_ICONS.month} ${gameState.month} AD ${gameState.year}`}</span>
+        <div className="flex items-center space-x-8 relative z-10">
+          <div className="flex items-center space-x-6 bg-amber-800/80 backdrop-blur-sm px-6 py-3 rounded-xl border-2 border-amber-600 shadow-roman animate-pulse-glow">
+            <div className="flex items-center space-x-3">
+              <span className="text-2xl animate-float">{RESOURCE_ICONS.denarii}</span>
+              <div>
+                <span className="font-bold text-xl text-glow">{gameState.denarii.toLocaleString()}</span>
+                <div className="text-xs text-amber-200">Denarii</div>
+              </div>
+            </div>
+            <div className="w-px h-8 bg-amber-600"></div>
+            <div className="flex items-center space-x-3">
+              <span className="text-2xl animate-float">{RESOURCE_ICONS.population}</span>
+              <div>
+                <span className="font-bold text-xl text-glow">{gameState.population.toLocaleString()}</span>
+                <div className="text-xs text-amber-200">Population</div>
+              </div>
+            </div>
+            <div className="w-px h-8 bg-amber-600"></div>
+            <div className="flex items-center space-x-3">
+              <span className="text-2xl animate-float">{RESOURCE_ICONS.food}</span>
+              <div>
+                <span className="font-bold text-xl text-glow">{gameState.food}</span>
+                <div className="text-xs text-amber-200">Food</div>
+              </div>
+            </div>
+            <div className="w-px h-8 bg-amber-600"></div>
+            <div className="flex items-center space-x-3">
+              <span className="text-2xl animate-float">{RESOURCE_ICONS.favor}</span>
+              <div>
+                <span className="font-bold text-xl text-glow">{gameState.favor}%</span>
+                <div className="text-xs text-amber-200">Favor</div>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center space-x-3 bg-amber-800/80 backdrop-blur-sm px-6 py-3 rounded-xl border-2 border-amber-600 shadow-roman">
+            <span className="text-2xl animate-float">{RESOURCE_ICONS.month}</span>
+            <div>
+              <span className="font-bold text-xl text-glow">{gameState.month} AD {gameState.year}</span>
+              <div className="text-xs text-amber-200">Current Date</div>
+            </div>
+            {gameState.isPaused && (
+              <div className="ml-3 px-3 py-1 bg-red-600/80 rounded-lg animate-pulse">
+                <span className="text-red-100 font-bold text-sm">⏸️ PAUSED</span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -468,44 +649,54 @@ export default function CaesarGame() {
           />
 
           {/* Game Controls Overlay */}
-          <div className="absolute top-4 left-4 flex items-center space-x-2">
-            <Button
-              size="sm"
-              variant={gameState.isPaused ? "default" : "secondary"}
-              onClick={togglePause}
-              className="bg-amber-700 hover:bg-amber-600 text-white"
-            >
-              {gameState.isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
-            </Button>
-            <Button 
-              size="sm" 
-              variant="secondary" 
-              className="bg-amber-700 hover:bg-amber-600 text-white"
-              onClick={() => setIsMuted(!isMuted)}
-            >
-              {isMuted ? "🔇" : "🔊"}
-            </Button>
-            <Button 
-              size="sm" 
-              variant="secondary" 
-              className="bg-amber-700 hover:bg-amber-600 text-white"
-              onClick={() => setShowSettingsDialog(true)}
-            >
-              <Settings className="w-4 h-4" />
-            </Button>
+          <div className="absolute top-6 left-6 flex items-center space-x-3">
+            <div className="bg-black/80 backdrop-blur-md rounded-xl p-4 border-2 border-amber-600 shadow-roman-lg animate-fade-in-up">
+              <div className="flex items-center space-x-3">
+                <Button
+                  size="sm"
+                  variant={gameState.isPaused ? "default" : "secondary"}
+                  onClick={togglePause}
+                  className="bg-gradient-to-r from-amber-700 to-amber-600 hover:from-amber-600 hover:to-amber-500 text-white shadow-lg transition-all duration-300 hover:scale-110"
+                >
+                  {gameState.isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+                </Button>
+                <Button 
+                  size="sm" 
+                  variant="secondary" 
+                  className="bg-gradient-to-r from-amber-700 to-amber-600 hover:from-amber-600 hover:to-amber-500 text-white shadow-lg transition-all duration-300 hover:scale-110"
+                  onClick={() => setIsMuted(!isMuted)}
+                >
+                  <span className="text-lg">{isMuted ? "🔇" : "🔊"}</span>
+                </Button>
+                <Button 
+                  size="sm" 
+                  variant="secondary" 
+                  className="bg-gradient-to-r from-amber-700 to-amber-600 hover:from-amber-600 hover:to-amber-500 text-white shadow-lg transition-all duration-300 hover:scale-110"
+                  onClick={() => setShowSettingsDialog(true)}
+                >
+                  <Settings className="w-4 h-4" />
+                </Button>
+              </div>
+              <div className="text-center mt-2 text-xs text-amber-200 opacity-80">
+                Press <kbd className="bg-amber-800 px-1 rounded text-xs">Space</kbd> to pause
+              </div>
+            </div>
           </div>
 
           {/* Notifications */}
-          <div className="absolute top-16 left-4 space-y-2">
+          <div className="absolute top-24 left-6 space-y-3">
             {notifications.map((notification, index) => (
               <div
                 key={notification.timestamp}
-                className="bg-amber-100 border-2 border-amber-800 rounded-lg px-3 py-2 text-sm text-amber-900 shadow-lg animate-pulse"
-                style={{ animationDelay: `${index * 0.1}s` }}
+                className="bg-gradient-to-r from-amber-50 to-amber-100 border-2 border-amber-600 rounded-xl px-4 py-3 text-sm text-amber-900 shadow-xl backdrop-blur-sm animate-slide-in"
+                style={{ 
+                  animationDelay: `${index * 0.1}s`,
+                  animationDuration: '0.5s'
+                }}
               >
-                <div className="flex items-center space-x-2">
-                  <span className="text-lg">{notification.icon}</span>
-                  <span>{notification.message}</span>
+                <div className="flex items-center space-x-3">
+                  <span className="text-2xl">{notification.icon}</span>
+                  <span className="font-semibold">{notification.message}</span>
                 </div>
               </div>
             ))}
@@ -513,33 +704,69 @@ export default function CaesarGame() {
 
           {/* Mouse Position Info */}
           {hoveredTile && (
-            <div className="absolute bottom-4 left-4 bg-black bg-opacity-75 text-white px-3 py-2 rounded text-sm">
-              <div>📍 Tile: ({hoveredTile.x}, {hoveredTile.y})</div>
-              <div>🏗️ Tool: {gameState.selectedTool}</div>
-              <div>
-                {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.terrain === "grass" && "🌱 Grass"}
-                {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.terrain === "water" && "🌊 Water"}
-                {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.terrain === "fertile" && "🌾 Fertile"}
-                {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.terrain === "forest" && "🌲 Forest"}
-                {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.terrain === "rock" && "🗿 Rock"}
+            <div className="absolute bottom-6 left-6 bg-black bg-opacity-90 backdrop-blur-sm text-white px-4 py-3 rounded-xl border border-amber-600 shadow-xl">
+              <div className="space-y-2">
+                <div className="flex items-center space-x-2">
+                  <span className="text-lg">📍</span>
+                  <span className="font-semibold">Tile ({hoveredTile.x}, {hoveredTile.y})</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <span className="text-lg">🏗️</span>
+                  <span className="font-semibold">Tool: {gameState.selectedTool}</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <span className="text-lg">
+                    {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.terrain === "grass" && "🌱"}
+                    {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.terrain === "water" && "🌊"}
+                    {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.terrain === "fertile" && "🌾"}
+                    {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.terrain === "forest" && "🌲"}
+                    {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.terrain === "rock" && "🗿"}
+                  </span>
+                  <span className="font-semibold capitalize">
+                    {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.terrain}
+                  </span>
+                </div>
+                {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.building && (
+                  <div className="flex items-center space-x-2">
+                    <span className="text-lg">🏠</span>
+                    <span className="font-semibold">Building: {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.building?.type}</span>
+                  </div>
+                )}
+                {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.hasRoad && (
+                  <div className="flex items-center space-x-2">
+                    <span className="text-lg">🛤️</span>
+                    <span className="font-semibold">Road</span>
+                  </div>
+                )}
               </div>
-              {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.building && (
-                <div>🏠 Building: {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.building?.type}</div>
-              )}
-              {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.hasRoad && <div>🛤️ Road</div>}
             </div>
           )}
         </div>
 
         {/* Right Sidebar - Building Tools */}
-        <div className="w-48 bg-gradient-to-b from-amber-100 to-amber-200 border-l-2 border-amber-800 flex flex-col">
+        <div className="w-56 bg-gradient-to-b from-amber-50 via-amber-100 to-amber-200 border-l-4 border-amber-800 flex flex-col shadow-roman-lg custom-scrollbar">
           {/* Category Tabs */}
-          <div className="bg-amber-800 text-white p-2">
-            <select
-              value={selectedCategory}
-              onChange={(e) => setSelectedCategory(e.target.value)}
-              className="w-full bg-amber-700 text-white rounded px-2 py-1 text-sm"
-            >
+          <div className="roman-gradient text-white p-4 border-b-2 border-amber-700 relative overflow-hidden">
+            {/* Background pattern */}
+            <div className="absolute inset-0 opacity-5">
+              <div className="absolute inset-0" style={{
+                backgroundImage: `url("data:image/svg+xml,%3Csvg width='40' height='40' viewBox='0 0 40 40' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23ffffff' fill-opacity='0.1'%3E%3Cpath d='M20 20c0-5.523-4.477-10-10-10s-10 4.477-10 10 4.477 10 10 10 10-4.477 10-10zm0 0c0 5.523 4.477 10 10 10s10-4.477 10-10-4.477-10-10-10-10 4.477-10 10z'/%3E%3C/g%3E%3C/svg%3E")`
+              }}></div>
+            </div>
+            
+            <div className="relative z-10">
+              <h3 className="text-lg font-bold mb-3 text-center text-glow">🏗️ Building Tools</h3>
+              <div className="text-center text-amber-200 text-sm mb-3">
+                Press <kbd className="bg-amber-800 px-1 rounded text-xs">1-9</kbd> to switch categories
+              </div>
+                          <select
+                value={selectedCategory}
+                onChange={(e) => {
+                  setSelectedCategory(e.target.value)
+                  showActionFeedback(`Switched to ${e.target.value} category`)
+                }}
+                className="w-full bg-amber-700 text-white rounded-lg px-3 py-2 text-sm border border-amber-600 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+              >
               {Object.keys(BUILDING_CATEGORIES).map((category) => (
                 <option key={category} value={category}>
                   {category === "housing" && "🏠 "}
@@ -561,28 +788,39 @@ export default function CaesarGame() {
           </div>
 
           {/* Building Icons Grid */}
-          <div className="flex-1 p-2 overflow-y-auto">
-            <div className="grid grid-cols-3 gap-1">
+          <div className="flex-1 p-4 overflow-y-auto">
+            <div className="grid grid-cols-3 gap-2">
               {BUILDING_CATEGORIES[selectedCategory as keyof typeof BUILDING_CATEGORIES]?.map((building) => (
                 <button
                   key={building.id}
-                  onClick={() => setGameState((prev) => ({ ...prev, selectedTool: building.id }))}
+                  onClick={() => {
+                    setGameState((prev) => ({ ...prev, selectedTool: building.id }))
+                    showActionFeedback(`Selected ${building.name}`)
+                  }}
+                  onMouseEnter={(e) => {
+                    setTooltipContent(`${building.name} - ${building.cost} Denarii${gameState.denarii < building.cost ? ' (Insufficient funds)' : ''}`)
+                    setTooltipPosition({ x: e.clientX, y: e.clientY })
+                    setShowTooltip(true)
+                  }}
+                  onMouseLeave={() => setShowTooltip(false)}
                   disabled={gameState.denarii < building.cost}
                   className={`
-                    aspect-square border-2 rounded flex flex-col items-center justify-center text-xs p-1
+                    aspect-square border-2 rounded-lg flex flex-col items-center justify-center text-xs p-2 transition-all duration-200 shadow-md
                     ${
                       gameState.selectedTool === building.id
-                        ? "border-amber-800 bg-amber-300"
+                        ? "border-amber-800 bg-gradient-to-br from-amber-300 to-amber-400 shadow-lg scale-105"
                         : gameState.denarii < building.cost
                           ? "border-gray-400 bg-gray-200 opacity-50 cursor-not-allowed"
-                          : "border-amber-600 bg-amber-50 hover:bg-amber-100"
+                          : "border-amber-600 bg-gradient-to-br from-amber-50 to-amber-100 hover:bg-gradient-to-br hover:from-amber-100 hover:to-amber-200 hover:scale-105 hover:shadow-lg"
                     }
                   `}
                   title={`${building.name} - ${building.cost} Denarii`}
                 >
-                  <span className="text-lg">{building.icon}</span>
-                  <span className="text-xs text-center leading-tight mt-1">{building.name}</span>
-                  <span className="text-xs text-amber-700">
+                  <span className="text-xl mb-1">{building.icon}</span>
+                  <span className="text-xs text-center leading-tight font-semibold">{building.name}</span>
+                  <span className={`text-xs mt-1 font-bold ${
+                    gameState.denarii >= building.cost ? "text-green-700" : "text-red-600"
+                  }`}>
                     {building.cost} {gameState.denarii >= building.cost ? "💰" : "❌"}
                   </span>
                 </button>
@@ -591,29 +829,29 @@ export default function CaesarGame() {
           </div>
 
           {/* Bottom Action Buttons */}
-          <div className="p-2 border-t border-amber-600 space-y-2">
+          <div className="p-4 border-t-2 border-amber-600 space-y-3 bg-gradient-to-t from-amber-200 to-amber-100">
             <Button
               onClick={() => setShowFestivalDialog(true)}
-              className="w-full bg-purple-700 hover:bg-purple-600 text-white text-xs"
+              className="w-full bg-gradient-to-r from-purple-700 to-purple-600 hover:from-purple-600 hover:to-purple-500 text-white text-sm font-semibold shadow-lg transition-all duration-200 hover:scale-105"
               size="sm"
             >
-              <Church className="w-4 h-4 mr-1" />
+              <Church className="w-4 h-4 mr-2" />
               🎉 Hold Festival
             </Button>
             <Button
               onClick={() => openAdvisor("trade")}
-              className="w-full bg-blue-700 hover:bg-blue-600 text-white text-xs"
+              className="w-full bg-gradient-to-r from-blue-700 to-blue-600 hover:from-blue-600 hover:to-blue-500 text-white text-sm font-semibold shadow-lg transition-all duration-200 hover:scale-105"
               size="sm"
             >
-              <Ship className="w-4 h-4 mr-1" />
+              <Ship className="w-4 h-4 mr-2" />
               🚢 Trade
             </Button>
             <Button
               onClick={() => openAdvisor("military")}
-              className="w-full bg-red-700 hover:bg-red-600 text-white text-xs"
+              className="w-full bg-gradient-to-r from-red-700 to-red-600 hover:from-red-600 hover:to-red-500 text-white text-sm font-semibold shadow-lg transition-all duration-200 hover:scale-105"
               size="sm"
             >
-              <Swords className="w-4 h-4 mr-1" />
+              <Swords className="w-4 h-4 mr-2" />
               ⚔️ Military
             </Button>
           </div>
@@ -622,88 +860,111 @@ export default function CaesarGame() {
 
       {/* Festival Dialog - Roman Style */}
       <Dialog open={showFestivalDialog} onOpenChange={setShowFestivalDialog}>
-        <DialogContent className="max-w-2xl bg-gradient-to-b from-amber-50 to-amber-100 border-4 border-amber-800">
-          <div
-            className="absolute inset-0 opacity-20 bg-cover bg-center"
-            style={{ backgroundImage: "url('/images/festival-bg.jpg')" }}
-          />
+        <DialogContent className="max-w-2xl bg-gradient-to-br from-amber-50 via-amber-100 to-amber-200 border-4 border-amber-800 shadow-2xl rounded-2xl">
           <div className="relative z-10">
             <DialogHeader>
-              <DialogTitle className="text-2xl text-amber-900 text-center font-bold">
-                🎉 Hold festival to {ROMAN_GODS.find((g) => g.id === selectedGod)?.name} 🎊
+              <DialogTitle className="text-3xl text-amber-900 text-center font-bold mb-2">
+                🎉 Hold Festival to {ROMAN_GODS.find((g) => g.id === selectedGod)?.name} 🎊
               </DialogTitle>
+              <p className="text-center text-amber-700 text-sm">Choose a god and festival type to please the Roman pantheon</p>
             </DialogHeader>
 
             {/* God Selection */}
-            <div className="flex justify-center space-x-4 my-6">
-              {ROMAN_GODS.map((god) => (
-                <button
-                  key={god.id}
-                  onClick={() => setSelectedGod(god.id)}
-                  className={`
-                    w-16 h-16 rounded-lg border-4 flex items-center justify-center text-2xl
-                    ${
-                      selectedGod === god.id
-                        ? "border-amber-800 bg-amber-200"
-                        : "border-amber-600 bg-amber-50 hover:bg-amber-100"
-                    }
-                  `}
-                  title={`${god.name} - ${god.domain}`}
-                >
-                  {god.portrait}
-                </button>
-              ))}
+            <div className="my-6">
+              <h3 className="text-lg font-semibold text-amber-800 mb-4 text-center">Choose a Roman God</h3>
+              <div className="flex justify-center space-x-4">
+                {ROMAN_GODS.map((god) => (
+                  <button
+                    key={god.id}
+                    onClick={() => setSelectedGod(god.id)}
+                    className={`
+                      w-20 h-20 rounded-xl border-4 flex flex-col items-center justify-center text-3xl transition-all duration-200 shadow-lg
+                      ${
+                        selectedGod === god.id
+                          ? "border-amber-800 bg-gradient-to-br from-amber-200 to-amber-300 scale-110 shadow-xl"
+                          : "border-amber-600 bg-gradient-to-br from-amber-50 to-amber-100 hover:bg-gradient-to-br hover:from-amber-100 hover:to-amber-200 hover:scale-105"
+                      }
+                    `}
+                    title={`${god.name} - ${god.domain}`}
+                  >
+                    <span>{god.portrait}</span>
+                    <span className="text-xs font-semibold text-amber-800 mt-1">{god.name}</span>
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Festival Options */}
-            <div className="space-y-3">
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold text-amber-800 mb-3 text-center">Festival Types</h3>
               <button 
-                className="w-full flex justify-between items-center p-3 bg-amber-50 rounded border-2 border-amber-600 hover:bg-amber-100"
+                className="w-full flex justify-between items-center p-4 bg-gradient-to-r from-amber-50 to-amber-100 rounded-xl border-2 border-amber-600 hover:from-amber-100 hover:to-amber-200 transition-all duration-200 shadow-md hover:shadow-lg"
                 onClick={() => {
                   if (gameState.denarii >= 145) {
                     setGameState(prev => ({ ...prev, denarii: prev.denarii - 145 }))
                     addNotification("festival_success")
+                    showActionFeedback("Small Festival held!")
                     setShowFestivalDialog(false)
                   } else {
                     addNotification("insufficient_funds")
+                    showActionFeedback("Insufficient funds!")
                   }
                 }}
               >
-                <span className="font-semibold">🎭 Small festival</span>
-                <span>145 💰</span>
+                <div className="flex items-center space-x-3">
+                  <span className="text-2xl">🎭</span>
+                  <div>
+                    <span className="font-bold text-lg">Small Festival</span>
+                    <div className="text-sm text-amber-700">A modest celebration</div>
+                  </div>
+                </div>
+                <span className="font-bold text-lg text-amber-800">145 💰</span>
               </button>
               <button 
-                className="w-full flex justify-between items-center p-3 bg-amber-50 rounded border-2 border-amber-600 hover:bg-amber-100"
+                className="w-full flex justify-between items-center p-4 bg-gradient-to-r from-amber-100 to-amber-200 rounded-xl border-2 border-amber-600 hover:from-amber-200 hover:to-amber-300 transition-all duration-200 shadow-md hover:shadow-lg"
                 onClick={() => {
                   if (gameState.denarii >= 291) {
                     setGameState(prev => ({ ...prev, denarii: prev.denarii - 291 }))
                     addNotification("festival_success")
+                    showActionFeedback("Large Festival held!")
                     setShowFestivalDialog(false)
                   } else {
                     addNotification("insufficient_funds")
+                    showActionFeedback("Insufficient funds!")
                   }
                 }}
               >
-                <span className="font-semibold">🎪 Large festival</span>
-                <span>291 💰</span>
+                <div className="flex items-center space-x-3">
+                  <span className="text-2xl">🎪</span>
+                  <div>
+                    <span className="font-bold text-lg">Large Festival</span>
+                    <div className="text-sm text-amber-700">A grand celebration</div>
+                  </div>
+                </div>
+                <span className="font-bold text-lg text-amber-800">291 💰</span>
               </button>
               <button 
-                className="w-full flex justify-between items-center p-3 bg-amber-100 rounded border-2 border-amber-800 hover:bg-amber-200"
+                className="w-full flex justify-between items-center p-4 bg-gradient-to-r from-amber-200 to-amber-300 rounded-xl border-2 border-amber-800 hover:from-amber-300 hover:to-amber-400 transition-all duration-200 shadow-lg hover:shadow-xl"
                 onClick={() => {
                   if (gameState.denarii >= 500) {
                     setGameState(prev => ({ ...prev, denarii: prev.denarii - 500 }))
                     addNotification("festival_success")
+                    showActionFeedback("Grand Festival held!")
                     setShowFestivalDialog(false)
                   } else {
                     addNotification("insufficient_funds")
+                    showActionFeedback("Insufficient funds!")
                   }
                 }}
               >
-                <div>
-                  <span className="font-semibold">🏛️ Grand festival</span>
-                  <div className="text-sm text-gray-600">Arrange a festival in honor of this god</div>
+                <div className="flex items-center space-x-3">
+                  <span className="text-2xl">🏛️</span>
+                  <div>
+                    <span className="font-bold text-lg">Grand Festival</span>
+                    <div className="text-sm text-amber-700">The most magnificent celebration</div>
+                  </div>
                 </div>
-                <span>500 💰</span>
+                <span className="font-bold text-lg text-amber-800">500 💰</span>
               </button>
             </div>
 
@@ -832,6 +1093,19 @@ export default function CaesarGame() {
               <h3 className="font-bold text-lg mb-2">💰 Resources</h3>
               <p className="text-sm">Manage your denarii, population, food, and Caesar's favor to build a prosperous city.</p>
             </div>
+            <div>
+              <h3 className="font-bold text-lg mb-2">⌨️ Keyboard Shortcuts</h3>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div><kbd className="bg-gray-200 px-2 py-1 rounded">Space</kbd> - Pause/Resume</div>
+                <div><kbd className="bg-gray-200 px-2 py-1 rounded">F</kbd> - Hold Festival</div>
+                <div><kbd className="bg-gray-200 px-2 py-1 rounded">A</kbd> - Open Advisors</div>
+                <div><kbd className="bg-gray-200 px-2 py-1 rounded">H</kbd> - Help</div>
+                <div><kbd className="bg-gray-200 px-2 py-1 rounded">S</kbd> - Settings</div>
+                <div><kbd className="bg-gray-200 px-2 py-1 rounded">M</kbd> - Mute/Unmute</div>
+                <div><kbd className="bg-gray-200 px-2 py-1 rounded">1-9</kbd> - Building Categories</div>
+                <div><kbd className="bg-gray-200 px-2 py-1 rounded">Esc</kbd> - Close Dialogs</div>
+              </div>
+            </div>
             <div className="text-center mt-4">
               <Button onClick={() => setShowHelpDialog(false)} className="bg-amber-700 hover:bg-amber-600">
                 ✅ Got it!
@@ -840,6 +1114,29 @@ export default function CaesarGame() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Tooltip */}
+      {showTooltip && (
+        <div 
+          className="fixed z-50 bg-black bg-opacity-90 text-white px-3 py-2 rounded-lg text-sm shadow-lg pointer-events-none"
+          style={{
+            left: tooltipPosition.x + 10,
+            top: tooltipPosition.y - 40
+          }}
+        >
+          {tooltipContent}
+        </div>
+      )}
+
+      {/* Action Feedback */}
+      {showLastAction && (
+        <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-50 bg-amber-800 text-white px-6 py-3 rounded-xl shadow-2xl animate-pulse">
+          <div className="text-center">
+            <div className="text-2xl mb-1">✨</div>
+            <div className="font-bold text-lg">{lastAction}</div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
