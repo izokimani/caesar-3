@@ -168,6 +168,15 @@ export default function CaesarGame() {
   const [showHelpDialog, setShowHelpDialog] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
 
+  // Add mobile and UX state
+  const [isMobile, setIsMobile] = useState(false)
+  const [showMobileMenu, setShowMobileMenu] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [gameError, setGameError] = useState<string | null>(null)
+  const [showTutorial, setShowTutorial] = useState(false)
+  const [tutorialStep, setTutorialStep] = useState(0)
+  const [showSaveLoad, setShowSaveLoad] = useState(false)
+
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   // Add state for mouse hover
@@ -180,6 +189,24 @@ export default function CaesarGame() {
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 })
   const [lastAction, setLastAction] = useState("")
   const [showLastAction, setShowLastAction] = useState(false)
+
+  // Mobile detection and setup
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768)
+    }
+    
+    checkMobile()
+    window.addEventListener('resize', checkMobile)
+    
+    // Simulate loading
+    const loadTimer = setTimeout(() => setIsLoading(false), 2000)
+    
+    return () => {
+      window.removeEventListener('resize', checkMobile)
+      clearTimeout(loadTimer)
+    }
+  }, [])
 
   // Add notification function
   const addNotification = useCallback((eventId: string) => {
@@ -369,22 +396,41 @@ export default function CaesarGame() {
     return { x: gridX, y: gridY }
   }, [])
 
-  // Add mouse move handler
-  const handleCanvasMouseMove = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
+  // Touch and mouse handlers
+  const getPointerPosition = useCallback((event: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    if (!canvas) return null
 
     const rect = canvas.getBoundingClientRect()
-    const mouseX = event.clientX - rect.left
-    const mouseY = event.clientY - rect.top
+    
+    let clientX: number, clientY: number
+    if ('touches' in event) {
+      if (event.touches.length === 0) return null
+      clientX = event.touches[0].clientX
+      clientY = event.touches[0].clientY
+    } else {
+      clientX = event.clientX
+      clientY = event.clientY
+    }
 
-    // Scale mouse coordinates to match canvas coordinates
+    const x = clientX - rect.left
+    const y = clientY - rect.top
+
+    // Scale coordinates to match canvas coordinates
     const scaleX = canvas.width / rect.width
     const scaleY = canvas.height / rect.height
-    const scaledX = mouseX * scaleX
-    const scaledY = mouseY * scaleY
+    const scaledX = x * scaleX
+    const scaledY = y * scaleY
 
-    const { x: gridX, y: gridY } = screenToGrid(scaledX, scaledY)
+    return { x, y, scaledX, scaledY }
+  }, [])
+
+  // Add mouse move handler
+  const handleCanvasMouseMove = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
+    const pos = getPointerPosition(event)
+    if (!pos) return
+
+    const { x: gridX, y: gridY } = screenToGrid(pos.scaledX, pos.scaledY)
 
     if (gridX >= 0 && gridX < 60 && gridY >= 0 && gridY < 40) {
       setHoveredTile({ x: gridX, y: gridY })
@@ -392,72 +438,117 @@ export default function CaesarGame() {
       setHoveredTile(null)
     }
 
-    setMousePos({ x: mouseX, y: mouseY })
-  }, [screenToGrid])
+    setMousePos({ x: pos.x, y: pos.y })
+  }, [screenToGrid, getPointerPosition])
+
+  // Touch handlers for mobile
+  const handleCanvasTouchStart = useCallback((event: React.TouchEvent<HTMLCanvasElement>) => {
+    event.preventDefault()
+    const pos = getPointerPosition(event)
+    if (!pos) return
+
+    const { x: gridX, y: gridY } = screenToGrid(pos.scaledX, pos.scaledY)
+
+    if (gridX >= 0 && gridX < 60 && gridY >= 0 && gridY < 40) {
+      setHoveredTile({ x: gridX, y: gridY })
+    }
+  }, [screenToGrid, getPointerPosition])
+
+  const handleCanvasTouchMove = useCallback((event: React.TouchEvent<HTMLCanvasElement>) => {
+    event.preventDefault()
+    const pos = getPointerPosition(event)
+    if (!pos) return
+
+    const { x: gridX, y: gridY } = screenToGrid(pos.scaledX, pos.scaledY)
+
+    if (gridX >= 0 && gridX < 60 && gridY >= 0 && gridY < 40) {
+      setHoveredTile({ x: gridX, y: gridY })
+    } else {
+      setHoveredTile(null)
+    }
+  }, [screenToGrid, getPointerPosition])
+
+  // Generic place building function
+  const placeBuildingAtPosition = useCallback((gridX: number, gridY: number) => {
+    // Ensure coordinates are within bounds
+    if (gridX >= 0 && gridX < 60 && gridY >= 0 && gridY < 40) {
+      setCityGrid((prev) => {
+        const newGrid = [...prev]
+        const tile = newGrid[gridY][gridX]
+
+        if (gameState.selectedTool === "road") {
+          tile.hasRoad = true
+          showActionFeedback("Road built!")
+        } else if (gameState.selectedTool === "clear_land") {
+          tile.building = undefined
+          tile.hasRoad = false
+          showActionFeedback("Land cleared!")
+        } else {
+          // Place building
+          const buildingData = Object.values(BUILDING_CATEGORIES)
+            .flat()
+            .find((b) => b.id === gameState.selectedTool)
+          
+          if (buildingData) {
+            if (gameState.denarii >= buildingData.cost) {
+              tile.building = {
+                type: gameState.selectedTool,
+                level: 1,
+              }
+              
+              // Deduct cost and add notification
+              setGameState(prev => ({
+                ...prev,
+                denarii: prev.denarii - buildingData.cost
+              }))
+              
+              addNotification("building_complete")
+              showActionFeedback(`${buildingData.name} built!`)
+            } else {
+              addNotification("insufficient_funds")
+              showActionFeedback("Insufficient funds!")
+            }
+          }
+        }
+
+        return newGrid
+      })
+    }
+  }, [gameState.selectedTool, gameState.denarii, addNotification, showActionFeedback])
 
   const handleCanvasClick = useCallback(
     (event: React.MouseEvent<HTMLCanvasElement>) => {
+      const pos = getPointerPosition(event)
+      if (!pos) return
+
+      const { x: gridX, y: gridY } = screenToGrid(pos.scaledX, pos.scaledY)
+      placeBuildingAtPosition(gridX, gridY)
+    },
+    [getPointerPosition, screenToGrid, placeBuildingAtPosition],
+  )
+
+  const handleCanvasTouchEnd = useCallback(
+    (event: React.TouchEvent<HTMLCanvasElement>) => {
+      event.preventDefault()
+      if (event.changedTouches.length === 0) return
+      
+      const touch = event.changedTouches[0]
       const canvas = canvasRef.current
       if (!canvas) return
 
       const rect = canvas.getBoundingClientRect()
-      const clickX = event.clientX - rect.left
-      const clickY = event.clientY - rect.top
+      const x = touch.clientX - rect.left
+      const y = touch.clientY - rect.top
 
-      // Scale mouse coordinates to match canvas coordinates
       const scaleX = canvas.width / rect.width
       const scaleY = canvas.height / rect.height
-      const scaledX = clickX * scaleX
-      const scaledY = clickY * scaleY
+      const scaledX = x * scaleX
+      const scaledY = y * scaleY
 
       const { x: gridX, y: gridY } = screenToGrid(scaledX, scaledY)
-
-      // Ensure coordinates are within bounds
-      if (gridX >= 0 && gridX < 60 && gridY >= 0 && gridY < 40) {
-        setCityGrid((prev) => {
-          const newGrid = [...prev]
-          const tile = newGrid[gridY][gridX]
-
-          if (gameState.selectedTool === "road") {
-            tile.hasRoad = true
-            showActionFeedback("Road built!")
-          } else if (gameState.selectedTool === "clear_land") {
-            tile.building = undefined
-            tile.hasRoad = false
-            showActionFeedback("Land cleared!")
-          } else {
-            // Place building
-            const buildingData = Object.values(BUILDING_CATEGORIES)
-              .flat()
-              .find((b) => b.id === gameState.selectedTool)
-            
-            if (buildingData) {
-              if (gameState.denarii >= buildingData.cost) {
-                tile.building = {
-                  type: gameState.selectedTool,
-                  level: 1,
-                }
-                
-                // Deduct cost and add notification
-                setGameState(prev => ({
-                  ...prev,
-                  denarii: prev.denarii - buildingData.cost
-                }))
-                
-                addNotification("building_complete")
-                showActionFeedback(`${buildingData.name} built!`)
-              } else {
-                addNotification("insufficient_funds")
-                showActionFeedback("Insufficient funds!")
-              }
-            }
-          }
-
-          return newGrid
-        })
-      }
+      placeBuildingAtPosition(gridX, gridY)
     },
-    [gameState.selectedTool, gameState.denarii, addNotification, screenToGrid],
+    [screenToGrid, placeBuildingAtPosition],
   )
 
   const togglePause = () => {
@@ -468,6 +559,77 @@ export default function CaesarGame() {
     setCurrentAdvisor(advisor)
     setShowAdvisorDialog(true)
   }
+
+  // Save/Load functionality
+  const saveGame = useCallback(() => {
+    try {
+      const gameData = {
+        gameState,
+        cityGrid,
+        timestamp: Date.now()
+      }
+      localStorage.setItem('caesar-game-save', JSON.stringify(gameData))
+      showActionFeedback("Game saved!")
+      addNotification("building_complete")
+    } catch (error) {
+      console.error('Failed to save game:', error)
+      showActionFeedback("Save failed!")
+      setGameError("Failed to save game")
+    }
+  }, [gameState, cityGrid, showActionFeedback, addNotification])
+
+  const loadGame = useCallback(() => {
+    try {
+      const saved = localStorage.getItem('caesar-game-save')
+      if (saved) {
+        const gameData = JSON.parse(saved)
+        setGameState(gameData.gameState)
+        setCityGrid(gameData.cityGrid)
+        showActionFeedback("Game loaded!")
+        addNotification("building_complete")
+        setShowSaveLoad(false)
+      } else {
+        showActionFeedback("No saved game found")
+      }
+    } catch (error) {
+      console.error('Failed to load game:', error)
+      showActionFeedback("Load failed!")
+      setGameError("Failed to load game")
+    }
+  }, [showActionFeedback, addNotification])
+
+  const clearSave = useCallback(() => {
+    try {
+      localStorage.removeItem('caesar-game-save')
+      showActionFeedback("Save cleared!")
+    } catch (error) {
+      console.error('Failed to clear save:', error)
+      showActionFeedback("Clear failed!")
+    }
+  }, [showActionFeedback])
+
+  // Tutorial functions
+  const startTutorial = useCallback(() => {
+    setShowTutorial(true)
+    setTutorialStep(0)
+    showActionFeedback("Tutorial started!")
+  }, [showActionFeedback])
+
+  const nextTutorialStep = useCallback(() => {
+    if (tutorialStep < 4) {
+      setTutorialStep(tutorialStep + 1)
+    } else {
+      setShowTutorial(false)
+      setTutorialStep(0)
+      showActionFeedback("Tutorial completed!")
+    }
+  }, [tutorialStep, showActionFeedback])
+
+  const skipTutorial = useCallback(() => {
+    setShowTutorial(false)
+    setTutorialStep(0)
+    showActionFeedback("Tutorial skipped!")
+  }, [showActionFeedback])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -539,10 +701,42 @@ export default function CaesarGame() {
     return () => window.removeEventListener('keydown', handleKeyPress)
   }, [gameState.isPaused, showFestivalDialog, showAdvisorDialog, showSettingsDialog, showHelpDialog, isMuted, selectedCategory, togglePause, openAdvisor, showActionFeedback])
 
+  // Loading screen
+  if (isLoading) {
+    return (
+      <div className="h-screen bg-gradient-to-br from-amber-900 via-amber-800 to-amber-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-6xl mb-6 animate-float">🏛️</div>
+          <h1 className="text-4xl font-bold text-white mb-4 text-glow">CAESAR III</h1>
+          <p className="text-amber-200 mb-8">Loading your empire...</p>
+          <div className="w-64 h-2 bg-amber-800 rounded-full mx-auto">
+            <div className="h-full bg-gradient-to-r from-amber-400 to-amber-200 rounded-full animate-pulse"></div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Error screen
+  if (gameError) {
+    return (
+      <div className="h-screen bg-gradient-to-br from-red-900 via-red-800 to-red-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-6xl mb-6">⚠️</div>
+          <h1 className="text-4xl font-bold text-white mb-4">Game Error</h1>
+          <p className="text-red-200 mb-8">{gameError}</p>
+          <Button onClick={() => setGameError(null)} className="bg-red-600 hover:bg-red-500">
+            Try Again
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="h-screen bg-black flex flex-col overflow-hidden">
+    <div className={`h-screen bg-black flex flex-col overflow-hidden ${isMobile ? 'mobile-layout' : ''}`}>
       {/* Top Menu Bar - Caesar 3 Style */}
-      <div className="roman-gradient text-white px-6 py-4 flex items-center justify-between text-sm border-b-4 border-amber-950 shadow-roman-lg relative overflow-hidden">
+      <div className="roman-gradient text-white px-3 md:px-6 py-2 md:py-4 flex items-center justify-between text-sm border-b-4 border-amber-950 shadow-roman-lg relative overflow-hidden">
         {/* Background pattern */}
         <div className="absolute inset-0 opacity-10">
           <div className="absolute inset-0" style={{
@@ -550,102 +744,197 @@ export default function CaesarGame() {
           }}></div>
         </div>
         
-        <div className="flex items-center space-x-8 relative z-10">
-          <div className="flex items-center space-x-3 animate-float">
-            <span className="text-3xl text-glow">🏛️</span>
+        <div className="flex items-center space-x-2 md:space-x-8 relative z-10">
+          <div className="flex items-center space-x-2 md:space-x-3 animate-float">
+            <span className="text-2xl md:text-3xl text-glow">🏛️</span>
             <div>
-              <span className="text-roman text-2xl tracking-wider text-glow">CAESAR III</span>
-              <div className="text-xs text-amber-200 opacity-80">The Emoji Asset Library</div>
+              <span className="text-roman text-lg md:text-2xl tracking-wider text-glow">CAESAR III</span>
+              {!isMobile && <div className="text-xs text-amber-200 opacity-80">The Emoji Asset Library</div>}
             </div>
           </div>
-          <div className="flex items-center space-x-6">
-            <button className="flex items-center space-x-2 px-4 py-2 rounded-lg hover:bg-amber-700/50 transition-all duration-300 hover:scale-105 btn-roman">
-              <span className="text-lg">📁</span>
-              <span className="font-semibold">File</span>
-            </button>
+          
+          {isMobile ? (
+            /* Mobile menu button */
             <button 
-              onClick={() => setShowSettingsDialog(true)}
-              className="flex items-center space-x-2 px-4 py-2 rounded-lg hover:bg-amber-700/50 transition-all duration-300 hover:scale-105 btn-roman"
+              onClick={() => setShowMobileMenu(!showMobileMenu)}
+              className="flex items-center space-x-1 px-3 py-2 rounded-lg hover:bg-amber-700/50 transition-all duration-300 btn-roman"
+              aria-label="Menu"
             >
-              <span className="text-lg">⚙️</span>
-              <span className="font-semibold">Options</span>
+              <span className="text-lg">☰</span>
             </button>
-            <button 
-              onClick={() => setShowHelpDialog(true)}
-              className="flex items-center space-x-2 px-4 py-2 rounded-lg hover:bg-amber-700/50 transition-all duration-300 hover:scale-105 btn-roman"
-            >
-              <span className="text-lg">❓</span>
-              <span className="font-semibold">Help</span>
-            </button>
-            <button 
-              onClick={() => openAdvisor("chief")}
-              className="flex items-center space-x-2 px-4 py-2 rounded-lg hover:bg-amber-700/50 transition-all duration-300 hover:scale-105 btn-roman"
-            >
-              <span className="text-lg">👨‍💼</span>
-              <span className="font-semibold">Advisors</span>
-            </button>
-          </div>
+          ) : (
+            /* Desktop menu */
+            <div className="flex items-center space-x-6">
+              <button 
+                onClick={() => setShowSaveLoad(true)}
+                className="flex items-center space-x-2 px-4 py-2 rounded-lg hover:bg-amber-700/50 transition-all duration-300 hover:scale-105 btn-roman"
+              >
+                <span className="text-lg">📁</span>
+                <span className="font-semibold">Save/Load</span>
+              </button>
+              <button 
+                onClick={() => setShowSettingsDialog(true)}
+                className="flex items-center space-x-2 px-4 py-2 rounded-lg hover:bg-amber-700/50 transition-all duration-300 hover:scale-105 btn-roman"
+              >
+                <span className="text-lg">⚙️</span>
+                <span className="font-semibold">Options</span>
+              </button>
+              <button 
+                onClick={startTutorial}
+                className="flex items-center space-x-2 px-4 py-2 rounded-lg hover:bg-amber-700/50 transition-all duration-300 hover:scale-105 btn-roman"
+              >
+                <span className="text-lg">🎓</span>
+                <span className="font-semibold">Tutorial</span>
+              </button>
+              <button 
+                onClick={() => setShowHelpDialog(true)}
+                className="flex items-center space-x-2 px-4 py-2 rounded-lg hover:bg-amber-700/50 transition-all duration-300 hover:scale-105 btn-roman"
+              >
+                <span className="text-lg">❓</span>
+                <span className="font-semibold">Help</span>
+              </button>
+              <button 
+                onClick={() => openAdvisor("chief")}
+                className="flex items-center space-x-2 px-4 py-2 rounded-lg hover:bg-amber-700/50 transition-all duration-300 hover:scale-105 btn-roman"
+              >
+                <span className="text-lg">👨‍💼</span>
+                <span className="font-semibold">Advisors</span>
+              </button>
+            </div>
+          )}
         </div>
 
-        <div className="flex items-center space-x-8 relative z-10">
-          <div className="flex items-center space-x-6 bg-amber-800/80 backdrop-blur-sm px-6 py-3 rounded-xl border-2 border-amber-600 shadow-roman animate-pulse-glow">
-            <div className="flex items-center space-x-3">
-              <span className="text-2xl animate-float">{RESOURCE_ICONS.denarii}</span>
-              <div>
-                <span className="font-bold text-xl text-glow">{gameState.denarii.toLocaleString()}</span>
-                <div className="text-xs text-amber-200">Denarii</div>
-              </div>
-            </div>
-            <div className="w-px h-8 bg-amber-600"></div>
-            <div className="flex items-center space-x-3">
-              <span className="text-2xl animate-float">{RESOURCE_ICONS.population}</span>
-              <div>
-                <span className="font-bold text-xl text-glow">{gameState.population.toLocaleString()}</span>
-                <div className="text-xs text-amber-200">Population</div>
-              </div>
-            </div>
-            <div className="w-px h-8 bg-amber-600"></div>
-            <div className="flex items-center space-x-3">
-              <span className="text-2xl animate-float">{RESOURCE_ICONS.food}</span>
-              <div>
-                <span className="font-bold text-xl text-glow">{gameState.food}</span>
-                <div className="text-xs text-amber-200">Food</div>
-              </div>
-            </div>
-            <div className="w-px h-8 bg-amber-600"></div>
-            <div className="flex items-center space-x-3">
-              <span className="text-2xl animate-float">{RESOURCE_ICONS.favor}</span>
-              <div>
-                <span className="font-bold text-xl text-glow">{gameState.favor}%</span>
-                <div className="text-xs text-amber-200">Favor</div>
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center space-x-3 bg-amber-800/80 backdrop-blur-sm px-6 py-3 rounded-xl border-2 border-amber-600 shadow-roman">
-            <span className="text-2xl animate-float">{RESOURCE_ICONS.month}</span>
-            <div>
-              <span className="font-bold text-xl text-glow">{gameState.month} AD {gameState.year}</span>
-              <div className="text-xs text-amber-200">Current Date</div>
-            </div>
-            {gameState.isPaused && (
-              <div className="ml-3 px-3 py-1 bg-red-600/80 rounded-lg animate-pulse">
-                <span className="text-red-100 font-bold text-sm">⏸️ PAUSED</span>
-              </div>
+        <div className={`flex items-center ${isMobile ? 'space-x-2' : 'space-x-8'} relative z-10`}>
+          <div className={`flex items-center ${isMobile ? 'space-x-2 px-3 py-2' : 'space-x-6 px-6 py-3'} bg-amber-800/80 backdrop-blur-sm rounded-xl border-2 border-amber-600 shadow-roman ${!isMobile && 'animate-pulse-glow'}`}>
+            {!isMobile ? (
+              /* Desktop resource display */
+              <>
+                <div className="flex items-center space-x-3">
+                  <span className="text-2xl animate-float">{RESOURCE_ICONS.denarii}</span>
+                  <div>
+                    <span className="font-bold text-xl text-glow">{gameState.denarii.toLocaleString()}</span>
+                    <div className="text-xs text-amber-200">Denarii</div>
+                  </div>
+                </div>
+                <div className="w-px h-8 bg-amber-600"></div>
+                <div className="flex items-center space-x-3">
+                  <span className="text-2xl animate-float">{RESOURCE_ICONS.population}</span>
+                  <div>
+                    <span className="font-bold text-xl text-glow">{gameState.population.toLocaleString()}</span>
+                    <div className="text-xs text-amber-200">Population</div>
+                  </div>
+                </div>
+                <div className="w-px h-8 bg-amber-600"></div>
+                <div className="flex items-center space-x-3">
+                  <span className="text-2xl animate-float">{RESOURCE_ICONS.food}</span>
+                  <div>
+                    <span className="font-bold text-xl text-glow">{gameState.food}</span>
+                    <div className="text-xs text-amber-200">Food</div>
+                  </div>
+                </div>
+                <div className="w-px h-8 bg-amber-600"></div>
+                <div className="flex items-center space-x-3">
+                  <span className="text-2xl animate-float">{RESOURCE_ICONS.favor}</span>
+                  <div>
+                    <span className="font-bold text-xl text-glow">{gameState.favor}%</span>
+                    <div className="text-xs text-amber-200">Favor</div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              /* Mobile resource display - compact */
+              <>
+                <div className="flex items-center space-x-1">
+                  <span className="text-lg">{RESOURCE_ICONS.denarii}</span>
+                  <span className="font-bold text-sm">{gameState.denarii.toLocaleString()}</span>
+                </div>
+                <div className="w-px h-6 bg-amber-600"></div>
+                <div className="flex items-center space-x-1">
+                  <span className="text-lg">{RESOURCE_ICONS.population}</span>
+                  <span className="font-bold text-sm">{gameState.population}</span>
+                </div>
+                <div className="w-px h-6 bg-amber-600"></div>
+                <div className="flex items-center space-x-1">
+                  <span className="text-lg">{RESOURCE_ICONS.food}</span>
+                  <span className="font-bold text-sm">{gameState.food}</span>
+                </div>
+              </>
             )}
           </div>
+          
+          {!isMobile && (
+            <div className="flex items-center space-x-3 bg-amber-800/80 backdrop-blur-sm px-6 py-3 rounded-xl border-2 border-amber-600 shadow-roman">
+              <span className="text-2xl animate-float">{RESOURCE_ICONS.month}</span>
+              <div>
+                <span className="font-bold text-xl text-glow">{gameState.month} AD {gameState.year}</span>
+                <div className="text-xs text-amber-200">Current Date</div>
+              </div>
+              {gameState.isPaused && (
+                <div className="ml-3 px-3 py-1 bg-red-600/80 rounded-lg animate-pulse">
+                  <span className="text-red-100 font-bold text-sm">⏸️ PAUSED</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      {/* Mobile Menu Overlay */}
+      {isMobile && showMobileMenu && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm" onClick={() => setShowMobileMenu(false)}>
+          <div className="absolute top-16 left-0 right-0 bg-gradient-to-b from-amber-50 to-amber-100 border-b-4 border-amber-800 shadow-2xl p-4 space-y-3">
+            <button 
+              onClick={() => { setShowSaveLoad(true); setShowMobileMenu(false); }}
+              className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg bg-amber-600 text-white font-semibold shadow-lg hover:bg-amber-500 transition-all"
+            >
+              <span className="text-xl">📁</span>
+              <span>Save/Load Game</span>
+            </button>
+            <button 
+              onClick={() => { setShowSettingsDialog(true); setShowMobileMenu(false); }}
+              className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg bg-amber-600 text-white font-semibold shadow-lg hover:bg-amber-500 transition-all"
+            >
+              <span className="text-xl">⚙️</span>
+              <span>Settings</span>
+            </button>
+            <button 
+              onClick={() => { startTutorial(); setShowMobileMenu(false); }}
+              className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg bg-amber-600 text-white font-semibold shadow-lg hover:bg-amber-500 transition-all"
+            >
+              <span className="text-xl">🎓</span>
+              <span>Tutorial</span>
+            </button>
+            <button 
+              onClick={() => { setShowHelpDialog(true); setShowMobileMenu(false); }}
+              className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg bg-amber-600 text-white font-semibold shadow-lg hover:bg-amber-500 transition-all"
+            >
+              <span className="text-xl">❓</span>
+              <span>Help</span>
+            </button>
+            <button 
+              onClick={() => { openAdvisor("chief"); setShowMobileMenu(false); }}
+              className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg bg-amber-600 text-white font-semibold shadow-lg hover:bg-amber-500 transition-all"
+            >
+              <span className="text-xl">👨‍💼</span>
+              <span>Advisors</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className={`flex flex-1 overflow-hidden ${isMobile ? 'flex-col' : ''}`}>
         {/* Main Game Area */}
         <div className="flex-1 relative bg-green-800">
           <canvas
             ref={canvasRef}
             width={1200}
             height={800}
-            className="w-full h-full cursor-crosshair"
+            className="w-full h-full cursor-crosshair touch-none"
             onClick={handleCanvasClick}
             onMouseMove={handleCanvasMouseMove}
+            onTouchStart={handleCanvasTouchStart}
+            onTouchMove={handleCanvasTouchMove}
+            onTouchEnd={handleCanvasTouchEnd}
           />
 
           {/* Game Controls Overlay */}
@@ -744,7 +1033,7 @@ export default function CaesarGame() {
         </div>
 
         {/* Right Sidebar - Building Tools */}
-        <div className="w-56 bg-gradient-to-b from-amber-50 via-amber-100 to-amber-200 border-l-4 border-amber-800 flex flex-col shadow-roman-lg custom-scrollbar">
+        <div className={`${isMobile ? 'h-48 border-t-4 border-amber-800 border-l-0' : 'w-56 border-l-4 border-amber-800'} bg-gradient-to-b from-amber-50 via-amber-100 to-amber-200 flex flex-col shadow-roman-lg custom-scrollbar`}>
           {/* Category Tabs */}
           <div className="roman-gradient text-white p-4 border-b-2 border-amber-700 relative overflow-hidden">
             {/* Background pattern */}
@@ -1109,6 +1398,103 @@ export default function CaesarGame() {
             <div className="text-center mt-4">
               <Button onClick={() => setShowHelpDialog(false)} className="bg-amber-700 hover:bg-amber-600">
                 ✅ Got it!
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Tutorial Dialog */}
+      <Dialog open={showTutorial} onOpenChange={setShowTutorial}>
+        <DialogContent className="max-w-2xl bg-gradient-to-b from-amber-50 to-amber-100 border-4 border-amber-800">
+          <DialogHeader>
+            <DialogTitle className="text-2xl text-amber-900 text-center font-bold">
+              🎓 Tutorial - Step {tutorialStep + 1} of 5
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="p-6 text-center">
+            {tutorialStep === 0 && (
+              <div>
+                <div className="text-6xl mb-4">👋</div>
+                <h3 className="text-xl font-bold mb-3">Welcome to Caesar III!</h3>
+                <p>You are the governor of a Roman province. Your mission is to build a thriving city and please Caesar!</p>
+              </div>
+            )}
+            {tutorialStep === 1 && (
+              <div>
+                <div className="text-6xl mb-4">🏗️</div>
+                <h3 className="text-xl font-bold mb-3">Building Basics</h3>
+                <p>Use the building sidebar to select structures. Click on the map to place them. Each building costs denarii from your treasury.</p>
+              </div>
+            )}
+            {tutorialStep === 2 && (
+              <div>
+                <div className="text-6xl mb-4">🛤️</div>
+                <h3 className="text-xl font-bold mb-3">Roads and Planning</h3>
+                <p>Build roads to connect your buildings. Citizens need roads to travel between their homes, work, and entertainment.</p>
+              </div>
+            )}
+            {tutorialStep === 3 && (
+              <div>
+                <div className="text-6xl mb-4">💰</div>
+                <h3 className="text-xl font-bold mb-3">Managing Resources</h3>
+                <p>Watch your denarii, population, food, and Caesar's favor. Balance your city's needs to keep everyone happy!</p>
+              </div>
+            )}
+            {tutorialStep === 4 && (
+              <div>
+                <div className="text-6xl mb-4">🎉</div>
+                <h3 className="text-xl font-bold mb-3">You're Ready!</h3>
+                <p>Now you know the basics! Hold festivals to please the gods, build entertainment and commerce, and create the greatest Roman city ever!</p>
+              </div>
+            )}
+            
+            <div className="flex justify-center space-x-4 mt-6">
+              <Button onClick={skipTutorial} variant="outline" className="border-red-600 text-red-600">
+                Skip Tutorial
+              </Button>
+              <Button onClick={nextTutorialStep} className="bg-amber-700 hover:bg-amber-600">
+                {tutorialStep < 4 ? 'Next' : 'Start Playing!'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Save/Load Dialog */}
+      <Dialog open={showSaveLoad} onOpenChange={setShowSaveLoad}>
+        <DialogContent className="max-w-md bg-gradient-to-b from-amber-50 to-amber-100 border-4 border-amber-800">
+          <DialogHeader>
+            <DialogTitle className="text-2xl text-amber-900 text-center font-bold">
+              📁 Save & Load Game
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="p-6 space-y-4">
+            <Button 
+              onClick={saveGame}
+              className="w-full bg-green-600 hover:bg-green-500 text-white font-semibold py-3"
+            >
+              💾 Save Current Game
+            </Button>
+            <Button 
+              onClick={loadGame}
+              className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3"
+            >
+              📂 Load Saved Game
+            </Button>
+            <Button 
+              onClick={clearSave}
+              variant="outline"
+              className="w-full border-red-600 text-red-600 hover:bg-red-50 font-semibold py-3"
+            >
+              🗑️ Clear Save Data
+            </Button>
+            
+            <div className="text-center mt-4">
+              <Button onClick={() => setShowSaveLoad(false)} className="bg-amber-700 hover:bg-amber-600">
+                Close
               </Button>
             </div>
           </div>
