@@ -25,15 +25,131 @@ interface CityTile {
   building?: {
     type: string
     level: number
+    workersNeeded: number
+    workersAssigned: number
+    operatingEfficiency: number // 0-100%
+    lastWorkerUpdate: number
+    hasLabor: boolean
+    distanceToHousing: number
   }
   hasRoad: boolean
+  unemployedWorkers: number // For senate buildings
 }
+
+interface LaborPriority {
+  id: string
+  name: string
+  category: string
+  priority: number
+}
+
+interface EmploymentStats {
+  totalWorkers: number
+  employedWorkers: number
+  unemployedWorkers: number
+  totalJobs: number
+  unemploymentRate: number
+}
+
+// Employment data for buildings
+const BUILDING_EMPLOYMENT = {
+  // Housing provides workers but doesn't need them
+  "small_house": { workers: 0, provides: 2 },
+  "large_house": { workers: 0, provides: 4 },
+  "villa": { workers: 0, provides: 6 },
+  
+  // Water infrastructure
+  "well": { workers: 1, provides: 0 },
+  "fountain": { workers: 2, provides: 0 },
+  "reservoir": { workers: 4, provides: 0 },
+  "aqueduct": { workers: 1, provides: 0 },
+  
+  // Health services
+  "barber": { workers: 2, provides: 0 },
+  "bathhouse": { workers: 4, provides: 0 },
+  "doctor": { workers: 3, provides: 0 },
+  "hospital": { workers: 8, provides: 0 },
+  
+  // Education
+  "school": { workers: 3, provides: 0 },
+  "academy": { workers: 6, provides: 0 },
+  "library": { workers: 4, provides: 0 },
+  
+  // Entertainment
+  "theater": { workers: 5, provides: 0 },
+  "amphitheater": { workers: 8, provides: 0 },
+  "colosseum": { workers: 15, provides: 0 },
+  "hippodrome": { workers: 20, provides: 0 },
+  "actor_colony": { workers: 4, provides: 0 },
+  "gladiator_school": { workers: 6, provides: 0 },
+  
+  // Religion
+  "small_temple": { workers: 2, provides: 0 },
+  "large_temple": { workers: 6, provides: 0 },
+  "oracle": { workers: 8, provides: 0 },
+  
+  // Commerce
+  "market": { workers: 4, provides: 0 },
+  "granary": { workers: 6, provides: 0 },
+  "warehouse": { workers: 4, provides: 0 },
+  "dock": { workers: 8, provides: 0 },
+  
+  // Industry
+  "wheat_farm": { workers: 6, provides: 0 },
+  "vegetable_farm": { workers: 6, provides: 0 },
+  "fruit_farm": { workers: 6, provides: 0 },
+  "olive_farm": { workers: 6, provides: 0 },
+  "vine_farm": { workers: 6, provides: 0 },
+  "pig_farm": { workers: 8, provides: 0 },
+  "clay_pit": { workers: 10, provides: 0 },
+  "iron_mine": { workers: 12, provides: 0 },
+  "timber_yard": { workers: 8, provides: 0 },
+  "pottery_workshop": { workers: 4, provides: 0 },
+  "furniture_workshop": { workers: 6, provides: 0 },
+  "oil_workshop": { workers: 4, provides: 0 },
+  "wine_workshop": { workers: 6, provides: 0 },
+  "weapons_workshop": { workers: 8, provides: 0 },
+  
+  // Government
+  "forum": { workers: 4, provides: 0 },
+  "senate": { workers: 6, provides: 0 },
+  "governors_house": { workers: 8, provides: 0 },
+  "governors_villa": { workers: 12, provides: 0 },
+  "governors_palace": { workers: 20, provides: 0 },
+  
+  // Security
+  "prefecture": { workers: 4, provides: 0 },
+  "engineer_post": { workers: 3, provides: 0 },
+  
+  // Military
+  "barracks": { workers: 10, provides: 0 },
+  "fort": { workers: 15, provides: 0 },
+  "military_academy": { workers: 8, provides: 0 },
+}
+
+// Labor priority categories
+const LABOR_PRIORITIES = [
+  { id: "fire_prevention", name: "Fire Prevention", category: "security" },
+  { id: "food_production", name: "Food Production", category: "industry" },
+  { id: "water_supply", name: "Water Supply", category: "water" },
+  { id: "healthcare", name: "Healthcare", category: "health" },
+  { id: "education", name: "Education", category: "education" },
+  { id: "entertainment", name: "Entertainment", category: "entertainment" },
+  { id: "commerce", name: "Commerce & Trade", category: "commerce" },
+  { id: "religion", name: "Religious Services", category: "religion" },
+  { id: "government", name: "Government", category: "government" },
+  { id: "military", name: "Military", category: "military" },
+  { id: "beautification", name: "Beautification", category: "beautification" },
+]
 
 // Building categories matching Caesar 3
 const BUILDING_CATEGORIES = {
   housing: [
     { id: "clear_land", name: "Clear Land", icon: "🧹", cost: 0 },
     { id: "road", name: "Road", icon: "🛤️", cost: 2 },
+    { id: "small_house", name: "Small House", icon: "🏠", cost: 30 },
+    { id: "large_house", name: "Large House", icon: "🏘️", cost: 60 },
+    { id: "villa", name: "Villa", icon: "🏛️", cost: 120 },
   ],
   water: [
     { id: "well", name: "Well", icon: "🕳️", cost: 15 },
@@ -176,6 +292,21 @@ export default function CaesarGame() {
   const [showTutorial, setShowTutorial] = useState(false)
   const [tutorialStep, setTutorialStep] = useState(0)
   const [showSaveLoad, setShowSaveLoad] = useState(false)
+
+  // Employment and labor state
+  const [laborPriorities, setLaborPriorities] = useState<LaborPriority[]>(
+    LABOR_PRIORITIES.map((p, index) => ({ ...p, priority: index + 1 }))
+  )
+  const [employmentStats, setEmploymentStats] = useState<EmploymentStats>({
+    totalWorkers: 0,
+    employedWorkers: 0,
+    unemployedWorkers: 0,
+    totalJobs: 0,
+    unemploymentRate: 0
+  })
+  const [showLaborAdvisor, setShowLaborAdvisor] = useState(false)
+  const [showBuildingInspector, setShowBuildingInspector] = useState(false)
+  const [inspectedBuilding, setInspectedBuilding] = useState<{x: number, y: number, building: any} | null>(null)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
@@ -336,7 +467,7 @@ export default function CaesarGame() {
           ctx.fill()
         }
 
-        // Draw buildings with emojis
+        // Draw buildings with emojis and employment status
         if (tile.building) {
           const buildingData = Object.values(BUILDING_CATEGORIES)
             .flat()
@@ -346,6 +477,39 @@ export default function CaesarGame() {
             ctx.font = "16px Arial"
             ctx.textAlign = "center"
             ctx.fillText(buildingData.icon, 0, -2)
+
+            // Show employment status indicators
+            const employment = BUILDING_EMPLOYMENT[tile.building.type as keyof typeof BUILDING_EMPLOYMENT]
+            if (employment && employment.workers > 0) {
+              const efficiency = tile.building.operatingEfficiency || 0
+              
+              // Draw efficiency indicator
+              ctx.font = "8px Arial"
+              if (efficiency < 25) {
+                ctx.fillStyle = "#ff0000" // Red for no workers
+                ctx.fillText("❌", 8, -8)
+              } else if (efficiency < 75) {
+                ctx.fillStyle = "#ffaa00" // Orange for partial workers
+                ctx.fillText("⚠️", 8, -8)
+              } else {
+                ctx.fillStyle = "#00ff00" // Green for full workers
+                ctx.fillText("✅", 8, -8)
+              }
+            }
+
+            // Show unemployed workers around Senate buildings
+            if (tile.building.type === "senate" && tile.unemployedWorkers > 0) {
+              ctx.font = "12px Arial"
+              ctx.fillStyle = "#666666"
+              const workerCount = Math.min(tile.unemployedWorkers, 5)
+              for (let i = 0; i < workerCount; i++) {
+                const angle = (i / workerCount) * Math.PI * 2
+                const radius = 20
+                const workerX = Math.cos(angle) * radius
+                const workerY = Math.sin(angle) * radius
+                ctx.fillText("🧍", workerX, workerY)
+              }
+            }
           }
         }
 
@@ -491,9 +655,16 @@ export default function CaesarGame() {
           
           if (buildingData) {
             if (gameState.denarii >= buildingData.cost) {
+              const employment = BUILDING_EMPLOYMENT[gameState.selectedTool as keyof typeof BUILDING_EMPLOYMENT]
               tile.building = {
                 type: gameState.selectedTool,
                 level: 1,
+                workersNeeded: employment?.workers || 0,
+                workersAssigned: 0,
+                operatingEfficiency: employment?.workers ? 0 : 100,
+                lastWorkerUpdate: Date.now(),
+                hasLabor: employment?.workers ? false : true,
+                distanceToHousing: Infinity,
               }
               
               // Deduct cost and add notification
@@ -631,6 +802,188 @@ export default function CaesarGame() {
     showActionFeedback("Tutorial skipped!")
   }, [showActionFeedback])
 
+  // Employment and labor management functions
+  const calculateCommuteDistance = useCallback((building: {x: number, y: number}, housing: {x: number, y: number}) => {
+    // Simple Manhattan distance for commute calculation
+    return Math.abs(building.x - housing.x) + Math.abs(building.y - housing.y)
+  }, [])
+
+  const calculateEmploymentStats = useCallback(() => {
+    let totalWorkers = 0
+    let employedWorkers = 0
+    let totalJobs = 0
+
+    cityGrid.forEach(row => {
+      row.forEach(tile => {
+        if (tile.building) {
+          const employment = BUILDING_EMPLOYMENT[tile.building.type as keyof typeof BUILDING_EMPLOYMENT]
+          if (employment) {
+            if (employment.provides > 0) {
+              totalWorkers += employment.provides
+            }
+            if (employment.workers > 0) {
+              totalJobs += employment.workers
+              employedWorkers += tile.building.workersAssigned || 0
+            }
+          }
+        }
+      })
+    })
+
+    const unemployedWorkers = totalWorkers - employedWorkers
+    const unemploymentRate = totalWorkers > 0 ? (unemployedWorkers / totalWorkers) * 100 : 0
+
+    return {
+      totalWorkers,
+      employedWorkers,
+      unemployedWorkers,
+      totalJobs,
+      unemploymentRate
+    }
+  }, [cityGrid])
+
+  const allocateWorkers = useCallback(() => {
+    const stats = calculateEmploymentStats()
+    let availableWorkers = stats.unemployedWorkers
+
+    // Get all buildings that need workers
+    const buildingsNeedingWorkers: Array<{x: number, y: number, building: any, priority: number, distance: number}> = []
+    
+    cityGrid.forEach((row, y) => {
+      row.forEach((tile, x) => {
+        if (tile.building) {
+          const employment = BUILDING_EMPLOYMENT[tile.building.type as keyof typeof BUILDING_EMPLOYMENT]
+          if (employment && employment.workers > 0) {
+            const workersNeeded = employment.workers - (tile.building.workersAssigned || 0)
+            if (workersNeeded > 0) {
+              // Find closest housing for commute distance
+              let minDistance = Infinity
+              cityGrid.forEach((hRow, hy) => {
+                hRow.forEach((hTile, hx) => {
+                  if (hTile.building && BUILDING_EMPLOYMENT[hTile.building.type as keyof typeof BUILDING_EMPLOYMENT]?.provides > 0) {
+                    const distance = calculateCommuteDistance({x, y}, {x: hx, y: hy})
+                    minDistance = Math.min(minDistance, distance)
+                  }
+                })
+              })
+
+              // Determine priority based on building category
+              let priority = 10
+              laborPriorities.forEach(lp => {
+                const buildingData = Object.values(BUILDING_CATEGORIES).flat().find(b => b.id === tile.building?.type)
+                if (buildingData && lp.category === getBuildingCategory(tile.building.type)) {
+                  priority = lp.priority
+                }
+              })
+
+              buildingsNeedingWorkers.push({
+                x, y, building: tile.building, priority, distance: minDistance
+              })
+            }
+          }
+        }
+      })
+    })
+
+    // Sort by priority (lower number = higher priority), then by distance
+    buildingsNeedingWorkers.sort((a, b) => {
+      if (a.priority !== b.priority) return a.priority - b.priority
+      return a.distance - b.distance
+    })
+
+    // Allocate workers based on priorities and commute limits
+    setCityGrid(prev => {
+      const newGrid = [...prev]
+      
+      // Reset all worker assignments
+      newGrid.forEach(row => {
+        row.forEach(tile => {
+          if (tile.building) {
+            tile.building.workersAssigned = 0
+            tile.building.hasLabor = false
+            tile.building.operatingEfficiency = 0
+            tile.unemployedWorkers = 0
+          }
+        })
+      })
+      
+      buildingsNeedingWorkers.forEach(({x, y, building}) => {
+        const employment = BUILDING_EMPLOYMENT[building.type as keyof typeof BUILDING_EMPLOYMENT]
+        if (employment && availableWorkers > 0) {
+          const maxCommute = 15 // Maximum commute distance
+          const workersNeeded = employment.workers
+          const workersToAssign = Math.min(workersNeeded, availableWorkers)
+          
+          // Only assign if commute is reasonable
+          if (buildingsNeedingWorkers.find(b => b.x === x && b.y === y)?.distance <= maxCommute) {
+            newGrid[y][x].building!.workersAssigned = workersToAssign
+            newGrid[y][x].building!.hasLabor = workersToAssign >= employment.workers * 0.5
+            newGrid[y][x].building!.operatingEfficiency = Math.min(100, (workersToAssign / employment.workers) * 100)
+            availableWorkers -= workersToAssign
+          } else {
+            newGrid[y][x].building!.hasLabor = false
+            newGrid[y][x].building!.operatingEfficiency = 0
+          }
+        }
+      })
+
+      // Distribute remaining unemployed workers around Senate buildings
+      if (availableWorkers > 0) {
+        const senateBuildings = newGrid.flatMap((row, y) => 
+          row.map((tile, x) => ({ tile, x, y }))
+        ).filter(({tile}) => tile.building?.type === "senate")
+
+        if (senateBuildings.length > 0) {
+          const workersPerSenate = Math.floor(availableWorkers / senateBuildings.length)
+          senateBuildings.forEach(({tile, x, y}) => {
+            newGrid[y][x].unemployedWorkers = workersPerSenate
+          })
+        }
+      }
+
+      return newGrid
+    })
+
+    setEmploymentStats(stats)
+  }, [cityGrid, laborPriorities, calculateEmploymentStats, calculateCommuteDistance])
+
+  // Right-click handler for building inspection
+  const handleCanvasRightClick = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
+    event.preventDefault()
+    const pos = getPointerPosition(event)
+    if (!pos) return
+
+    const { x: gridX, y: gridY } = screenToGrid(pos.scaledX, pos.scaledY)
+
+    if (gridX >= 0 && gridX < 60 && gridY >= 0 && gridY < 40) {
+      const tile = cityGrid[gridY][gridX]
+      if (tile.building) {
+        setInspectedBuilding({ x: gridX, y: gridY, building: tile.building })
+        setShowBuildingInspector(true)
+      }
+    }
+  }, [cityGrid, getPointerPosition, screenToGrid])
+
+  const getBuildingCategory = useCallback((buildingType: string) => {
+    for (const [category, buildings] of Object.entries(BUILDING_CATEGORIES)) {
+      if (buildings.some(b => b.id === buildingType)) {
+        return category
+      }
+    }
+    return 'other'
+  }, [])
+
+  // Update employment every few seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!gameState.isPaused) {
+        allocateWorkers()
+      }
+    }, 3000)
+
+    return () => clearInterval(interval)
+  }, [allocateWorkers, gameState.isPaused])
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyPress = (event: KeyboardEvent) => {
@@ -660,6 +1013,12 @@ export default function CaesarGame() {
           if (!showAdvisorDialog) {
             openAdvisor("chief")
             showActionFeedback("Advisor Dialog Opened")
+          }
+          break
+        case 'l':
+          if (!showLaborAdvisor) {
+            setShowLaborAdvisor(true)
+            showActionFeedback("Labor Advisor Opened")
           }
           break
         case 'h':
@@ -793,13 +1152,20 @@ export default function CaesarGame() {
                 <span className="text-lg">❓</span>
                 <span className="font-semibold">Help</span>
               </button>
-              <button 
-                onClick={() => openAdvisor("chief")}
-                className="flex items-center space-x-2 px-4 py-2 rounded-lg hover:bg-amber-700/50 transition-all duration-300 hover:scale-105 btn-roman"
-              >
-                <span className="text-lg">👨‍💼</span>
-                <span className="font-semibold">Advisors</span>
-              </button>
+                             <button 
+                 onClick={() => setShowLaborAdvisor(true)}
+                 className="flex items-center space-x-2 px-4 py-2 rounded-lg hover:bg-amber-700/50 transition-all duration-300 hover:scale-105 btn-roman"
+               >
+                 <span className="text-lg">👷</span>
+                 <span className="font-semibold">Labor</span>
+               </button>
+               <button 
+                 onClick={() => openAdvisor("chief")}
+                 className="flex items-center space-x-2 px-4 py-2 rounded-lg hover:bg-amber-700/50 transition-all duration-300 hover:scale-105 btn-roman"
+               >
+                 <span className="text-lg">👨‍💼</span>
+                 <span className="font-semibold">Advisors</span>
+               </button>
             </div>
           )}
         </div>
@@ -854,13 +1220,18 @@ export default function CaesarGame() {
                   <span className="font-bold text-sm">{gameState.population}</span>
                 </div>
                 <div className="w-px h-6 bg-amber-600"></div>
-                <div className="flex items-center space-x-1">
-                  <span className="text-lg">{RESOURCE_ICONS.food}</span>
-                  <span className="font-bold text-sm">{gameState.food}</span>
-                </div>
-              </>
-            )}
-          </div>
+                                 <div className="flex items-center space-x-1">
+                   <span className="text-lg">{RESOURCE_ICONS.food}</span>
+                   <span className="font-bold text-sm">{gameState.food}</span>
+                 </div>
+                 <div className="w-px h-6 bg-amber-600"></div>
+                 <div className="flex items-center space-x-1">
+                   <span className="text-lg">👷</span>
+                   <span className="font-bold text-sm">{employmentStats.unemployedWorkers}</span>
+                 </div>
+               </>
+             )}
+           </div>
           
           {!isMobile && (
             <div className="flex items-center space-x-3 bg-amber-800/80 backdrop-blur-sm px-6 py-3 rounded-xl border-2 border-amber-600 shadow-roman">
@@ -889,6 +1260,13 @@ export default function CaesarGame() {
             >
               <span className="text-xl">📁</span>
               <span>Save/Load Game</span>
+            </button>
+            <button 
+              onClick={() => { setShowLaborAdvisor(true); setShowMobileMenu(false); }}
+              className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg bg-amber-600 text-white font-semibold shadow-lg hover:bg-amber-500 transition-all"
+            >
+              <span className="text-xl">👷</span>
+              <span>Labor Advisor</span>
             </button>
             <button 
               onClick={() => { setShowSettingsDialog(true); setShowMobileMenu(false); }}
@@ -931,6 +1309,7 @@ export default function CaesarGame() {
             height={800}
             className="w-full h-full cursor-crosshair touch-none"
             onClick={handleCanvasClick}
+            onContextMenu={handleCanvasRightClick}
             onMouseMove={handleCanvasMouseMove}
             onTouchStart={handleCanvasTouchStart}
             onTouchMove={handleCanvasTouchMove}
@@ -1016,10 +1395,32 @@ export default function CaesarGame() {
                   </span>
                 </div>
                 {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.building && (
-                  <div className="flex items-center space-x-2">
-                    <span className="text-lg">🏠</span>
-                    <span className="font-semibold">Building: {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.building?.type}</span>
-                  </div>
+                  <>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-lg">🏠</span>
+                      <span className="font-semibold">Building: {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.building?.type}</span>
+                    </div>
+                    {BUILDING_EMPLOYMENT[cityGrid[hoveredTile.y][hoveredTile.x].building!.type as keyof typeof BUILDING_EMPLOYMENT] && (
+                      <div className="flex items-center space-x-2">
+                        <span className="text-lg">👷</span>
+                        <span className="font-semibold">
+                          Workers: {cityGrid[hoveredTile.y][hoveredTile.x].building!.workersAssigned || 0}/
+                          {cityGrid[hoveredTile.y][hoveredTile.x].building!.workersNeeded || 0}
+                        </span>
+                      </div>
+                    )}
+                    {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.building?.operatingEfficiency !== undefined && (
+                      <div className="flex items-center space-x-2">
+                        <span className="text-lg">⚡</span>
+                        <span className={`font-semibold ${
+                          cityGrid[hoveredTile.y][hoveredTile.x].building!.operatingEfficiency >= 75 ? 'text-green-400' :
+                          cityGrid[hoveredTile.y][hoveredTile.x].building!.operatingEfficiency >= 25 ? 'text-yellow-400' : 'text-red-400'
+                        }`}>
+                          Efficiency: {cityGrid[hoveredTile.y][hoveredTile.x].building!.operatingEfficiency.toFixed(0)}%
+                        </span>
+                      </div>
+                    )}
+                  </>
                 )}
                 {cityGrid[hoveredTile.y]?.[hoveredTile.x]?.hasRoad && (
                   <div className="flex items-center space-x-2">
@@ -1383,17 +1784,27 @@ export default function CaesarGame() {
               <p className="text-sm">Manage your denarii, population, food, and Caesar's favor to build a prosperous city.</p>
             </div>
             <div>
+              <h3 className="font-bold text-lg mb-2">👷 Employment System</h3>
+              <p className="text-sm">Buildings need workers to operate. Housing provides workers. Use the Labor Advisor to set priorities for worker allocation. Workers won't commute too far!</p>
+            </div>
+            <div>
+              <h3 className="font-bold text-lg mb-2">🔍 Building Inspection</h3>
+              <p className="text-sm">Right-click any building to inspect its employment status, efficiency, and other details. Look for visual indicators: ✅ (fully staffed), ⚠️ (partially staffed), ❌ (no workers).</p>
+            </div>
+            <div>
               <h3 className="font-bold text-lg mb-2">⌨️ Keyboard Shortcuts</h3>
-              <div className="grid grid-cols-2 gap-2 text-sm">
-                <div><kbd className="bg-gray-200 px-2 py-1 rounded">Space</kbd> - Pause/Resume</div>
-                <div><kbd className="bg-gray-200 px-2 py-1 rounded">F</kbd> - Hold Festival</div>
-                <div><kbd className="bg-gray-200 px-2 py-1 rounded">A</kbd> - Open Advisors</div>
-                <div><kbd className="bg-gray-200 px-2 py-1 rounded">H</kbd> - Help</div>
-                <div><kbd className="bg-gray-200 px-2 py-1 rounded">S</kbd> - Settings</div>
-                <div><kbd className="bg-gray-200 px-2 py-1 rounded">M</kbd> - Mute/Unmute</div>
-                <div><kbd className="bg-gray-200 px-2 py-1 rounded">1-9</kbd> - Building Categories</div>
-                <div><kbd className="bg-gray-200 px-2 py-1 rounded">Esc</kbd> - Close Dialogs</div>
-              </div>
+                              <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div><kbd className="bg-gray-200 px-2 py-1 rounded">Space</kbd> - Pause/Resume</div>
+                  <div><kbd className="bg-gray-200 px-2 py-1 rounded">F</kbd> - Hold Festival</div>
+                  <div><kbd className="bg-gray-200 px-2 py-1 rounded">A</kbd> - Open Advisors</div>
+                  <div><kbd className="bg-gray-200 px-2 py-1 rounded">L</kbd> - Labor Advisor</div>
+                  <div><kbd className="bg-gray-200 px-2 py-1 rounded">H</kbd> - Help</div>
+                  <div><kbd className="bg-gray-200 px-2 py-1 rounded">S</kbd> - Settings</div>
+                  <div><kbd className="bg-gray-200 px-2 py-1 rounded">M</kbd> - Mute/Unmute</div>
+                  <div><kbd className="bg-gray-200 px-2 py-1 rounded">1-9</kbd> - Building Categories</div>
+                  <div><kbd className="bg-gray-200 px-2 py-1 rounded">Esc</kbd> - Close Dialogs</div>
+                  <div><kbd className="bg-gray-200 px-2 py-1 rounded">Right-click</kbd> - Inspect Building</div>
+                </div>
             </div>
             <div className="text-center mt-4">
               <Button onClick={() => setShowHelpDialog(false)} className="bg-amber-700 hover:bg-amber-600">
@@ -1498,6 +1909,168 @@ export default function CaesarGame() {
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Labor Advisor Dialog */}
+      <Dialog open={showLaborAdvisor} onOpenChange={setShowLaborAdvisor}>
+        <DialogContent className="max-w-3xl bg-gradient-to-b from-amber-50 to-amber-100 border-4 border-amber-800">
+          <DialogHeader>
+            <DialogTitle className="text-2xl text-amber-900 text-center font-bold">
+              👷 Labor Advisor - Employment Management
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="p-6">
+            {/* Employment Statistics */}
+            <div className="bg-white rounded-lg p-4 mb-6 border-2 border-amber-600">
+              <h3 className="text-lg font-bold mb-3 text-amber-900">📊 Employment Overview</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-blue-600">{employmentStats.totalWorkers}</div>
+                  <div className="text-sm text-gray-600">Total Workers</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-green-600">{employmentStats.employedWorkers}</div>
+                  <div className="text-sm text-gray-600">Employed</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-red-600">{employmentStats.unemployedWorkers}</div>
+                  <div className="text-sm text-gray-600">Unemployed</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-purple-600">{employmentStats.unemploymentRate.toFixed(1)}%</div>
+                  <div className="text-sm text-gray-600">Unemployment</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Labor Priorities */}
+            <div className="bg-white rounded-lg p-4 border-2 border-amber-600">
+              <h3 className="text-lg font-bold mb-3 text-amber-900">🎯 Labor Priorities</h3>
+              <p className="text-sm text-gray-600 mb-4">Set the order in which workers are allocated to different sectors. Lower numbers get priority.</p>
+              <div className="space-y-2">
+                {laborPriorities.slice().sort((a, b) => a.priority - b.priority).map((priority, index) => (
+                  <div key={priority.id} className="flex items-center justify-between p-3 bg-amber-50 rounded-lg">
+                    <div className="flex items-center space-x-3">
+                      <span className="font-bold text-lg text-amber-800">#{priority.priority}</span>
+                      <span className="font-semibold">{priority.name}</span>
+                    </div>
+                    <div className="flex space-x-2">
+                      <button
+                        onClick={() => {
+                          if (priority.priority > 1) {
+                            setLaborPriorities(prev => prev.map(p => 
+                              p.id === priority.id ? { ...p, priority: p.priority - 1 } :
+                              p.priority === priority.priority - 1 ? { ...p, priority: p.priority + 1 } : p
+                            ))
+                          }
+                        }}
+                        disabled={priority.priority === 1}
+                        className="px-2 py-1 bg-green-600 text-white rounded disabled:opacity-50"
+                      >
+                        ⬆️
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (priority.priority < laborPriorities.length) {
+                            setLaborPriorities(prev => prev.map(p => 
+                              p.id === priority.id ? { ...p, priority: p.priority + 1 } :
+                              p.priority === priority.priority + 1 ? { ...p, priority: p.priority - 1 } : p
+                            ))
+                          }
+                        }}
+                        disabled={priority.priority === laborPriorities.length}
+                        className="px-2 py-1 bg-red-600 text-white rounded disabled:opacity-50"
+                      >
+                        ⬇️
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="text-center mt-6">
+              <Button onClick={() => setShowLaborAdvisor(false)} className="bg-amber-700 hover:bg-amber-600">
+                Close
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Building Inspector Dialog */}
+      <Dialog open={showBuildingInspector} onOpenChange={setShowBuildingInspector}>
+        <DialogContent className="max-w-lg bg-gradient-to-b from-amber-50 to-amber-100 border-4 border-amber-800">
+          <DialogHeader>
+            <DialogTitle className="text-2xl text-amber-900 text-center font-bold">
+              🔍 Building Inspector
+            </DialogTitle>
+          </DialogHeader>
+
+          {inspectedBuilding && (
+            <div className="p-6">
+              <div className="text-center mb-4">
+                <div className="text-4xl mb-2">
+                  {Object.values(BUILDING_CATEGORIES).flat().find(b => b.id === inspectedBuilding.building.type)?.icon}
+                </div>
+                <h3 className="text-xl font-bold">
+                  {Object.values(BUILDING_CATEGORIES).flat().find(b => b.id === inspectedBuilding.building.type)?.name}
+                </h3>
+                <p className="text-sm text-gray-600">Position: ({inspectedBuilding.x}, {inspectedBuilding.y})</p>
+              </div>
+
+              <div className="space-y-4">
+                {/* Employment Information */}
+                {BUILDING_EMPLOYMENT[inspectedBuilding.building.type as keyof typeof BUILDING_EMPLOYMENT] && (
+                  <div className="bg-white rounded-lg p-4 border-2 border-amber-600">
+                    <h4 className="font-bold text-amber-900 mb-2">👷 Employment Status</h4>
+                    <div className="space-y-2">
+                      <div className="flex justify-between">
+                        <span>Workers Needed:</span>
+                        <span className="font-bold">{inspectedBuilding.building.workersNeeded}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Workers Assigned:</span>
+                        <span className="font-bold">{inspectedBuilding.building.workersAssigned}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Operating Efficiency:</span>
+                        <span className={`font-bold ${
+                          inspectedBuilding.building.operatingEfficiency >= 75 ? 'text-green-600' :
+                          inspectedBuilding.building.operatingEfficiency >= 25 ? 'text-yellow-600' : 'text-red-600'
+                        }`}>
+                          {inspectedBuilding.building.operatingEfficiency?.toFixed(0)}%
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Has Labor Access:</span>
+                        <span className={`font-bold ${inspectedBuilding.building.hasLabor ? 'text-green-600' : 'text-red-600'}`}>
+                          {inspectedBuilding.building.hasLabor ? '✅ Yes' : '❌ No'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Building Level */}
+                <div className="bg-white rounded-lg p-4 border-2 border-amber-600">
+                  <h4 className="font-bold text-amber-900 mb-2">🏗️ Building Information</h4>
+                  <div className="flex justify-between">
+                    <span>Building Level:</span>
+                    <span className="font-bold">{inspectedBuilding.building.level}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="text-center mt-6">
+                <Button onClick={() => setShowBuildingInspector(false)} className="bg-amber-700 hover:bg-amber-600">
+                  Close Inspector
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
